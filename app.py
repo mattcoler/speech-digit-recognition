@@ -85,12 +85,11 @@ def main():
     """)
     
     # Sidebar - model path
-    model_path = st.sidebar.text_input(
-        "Model Path", 
-        "models/digit_recognizer_best.pth",
-        help="Path to the trained model file"
-    )
-    
+model_path = st.sidebar.text_input(
+    "Model Path", 
+    "models/Digit Recognizer Best.pth",
+    help="Path to the trained model file"
+)
     # Load model
     try:
         model, device = load_model(model_path)
