@@ -2,3 +2,6 @@ torch>=1.7.0
 torchaudio>=0.7.0
 matplotlib>=3.3.0
 numpy>=1.19.0
+streamlit>=1.10.0
+soundfile>=0.10.3
+librosa>=0.8.0
