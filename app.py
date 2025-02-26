@@ -1,4 +1,9 @@
 import streamlit as st
+
+# Page config - THIS MUST BE THE FIRST STREAMLIT COMMAND
+st.set_page_config(page_title="Speech Digit Recognizer", layout="wide")
+
+# Now import everything else
 import torch
 import torchaudio
 import matplotlib.pyplot as plt
@@ -18,9 +23,6 @@ except ImportError:
     PYDUB_AVAILABLE = False
     st.warning("pydub not available. Audio processing may be limited.")
 
-# Page config
-st.set_page_config(page_title="Speech Digit Recognizer", layout="wide")
-
 # Load model function with robust error handling
 @st.cache_resource
 def load_model(model_path):
@@ -36,6 +38,8 @@ def load_model(model_path):
         st.sidebar.error(f"Error loading model: {str(e)}")
         st.stop()
 
+# The rest of your code remains the same
+# ...
 # Convert audio file to compatible format
 def convert_audio_to_wav(audio_bytes, output_path):
     """Convert audio to WAV format using pydub"""
