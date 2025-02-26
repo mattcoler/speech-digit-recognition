@@ -23,6 +23,13 @@ except ImportError:
     PYDUB_AVAILABLE = False
     st.warning("pydub not available. Audio processing may be limited.")
 
+# Try to import librosa as a fallback
+try:
+    import librosa
+    LIBROSA_AVAILABLE = True
+except ImportError:
+    LIBROSA_AVAILABLE = False
+
 # Load model function with robust error handling
 @st.cache_resource
 def load_model(model_path):
@@ -38,17 +45,20 @@ def load_model(model_path):
         st.sidebar.error(f"Error loading model: {str(e)}")
         st.stop()
 
-# The rest of your code remains the same
-# ...
 # Convert audio file to compatible format
-def convert_audio_to_wav(audio_bytes, output_path):
+def convert_audio_to_wav(audio_bytes, output_path, original_filename):
     """Convert audio to WAV format using pydub"""
     try:
         if not PYDUB_AVAILABLE:
             return False, "pydub not available for audio conversion"
         
-        # Create a temporary file to store the original audio
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_in_file:
+        # Get file extension from original filename
+        file_extension = os.path.splitext(original_filename)[1].lower() 
+        if not file_extension:
+            file_extension = '.tmp'  # Default extension if none is found
+        
+        # Create a temporary file to store the original audio with correct extension
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_in_file:
             tmp_in_file.write(audio_bytes)
             tmp_in_path = tmp_in_file.name
         
@@ -68,13 +78,55 @@ def convert_audio_to_wav(audio_bytes, output_path):
     except Exception as e:
         return False, f"Unexpected error in audio conversion: {str(e)}"
 
-# Audio processing function with error handling
-def predict_audio(model, audio_path, device):
-    """Process audio and make prediction"""
+# Audio processing function with improved error handling
+def predict_audio(model, audio_path, device, audio_bytes=None):
+    """Process audio and make prediction with multiple fallback methods"""
+    waveform = None
+    sample_rate = None
+    
+    # Method 1: Try standard torchaudio load
     try:
-        # Load audio file
         waveform, sample_rate = torchaudio.load(audio_path)
+        st.success("Audio loaded successfully with torchaudio")
+    except Exception as e1:
+        st.warning(f"Standard torchaudio loading failed: {str(e1)}")
         
+        # Method 2: Try torchaudio with different parameters
+        try:
+            waveform, sample_rate = torchaudio.load(
+                audio_path,
+                normalize=True,
+                channels_first=True
+            )
+            st.success("Audio loaded with alternative torchaudio parameters")
+        except Exception as e2:
+            st.warning(f"Alternative torchaudio loading failed: {str(e2)}")
+            
+            # Method 3: Try librosa if available
+            if LIBROSA_AVAILABLE and audio_bytes is not None:
+                try:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
+                        tmp_path = tmp_file.name
+                        with open(tmp_path, 'wb') as f:
+                            f.write(audio_bytes)
+                    
+                    y, sr = librosa.load(tmp_path, sr=16000, mono=True)
+                    waveform = torch.tensor(y).unsqueeze(0)  # Add channel dimension
+                    sample_rate = 16000
+                    st.success("Audio loaded with librosa")
+                    
+                    # Clean up
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+                except Exception as e3:
+                    st.error(f"Librosa loading failed: {str(e3)}")
+            
+            # If all methods failed
+            if waveform is None:
+                st.error("All audio loading methods failed")
+                return None, None, None, None, None, None
+    
+    try:
         # Resample if needed
         if sample_rate != 16000:
             resampler = torchaudio.transforms.Resample(sample_rate, 16000)
@@ -110,7 +162,7 @@ def predict_audio(model, audio_path, device):
         st.exception(e)
         return None, None, None, None, None, None
 
-# Visualization functions
+# Visualization functions remain the same
 def create_mel_spectrogram_plot(mel_spec):
     """Create a matplotlib figure for the mel spectrogram"""
     try:
@@ -187,30 +239,35 @@ def main():
         
         if audio_file is not None:
             # Display audio player
-            st.audio(audio_file, format="audio/wav")
+            st.audio(audio_file)
             
             # Create temp files for processing
             temp_original = None
             temp_converted = None
             
             try:
-                # Save uploaded file to a temporary location
+                # Save uploaded file to a temporary location with appropriate extension
                 audio_bytes = audio_file.getvalue()
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
+                file_extension = os.path.splitext(audio_file.name)[1].lower()
+                
+                # If no extension, default to .wav
+                if not file_extension:
+                    file_extension = '.wav'
+                
+                with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_file:
+                    tmp_file.write(audio_bytes)
                     temp_original = tmp_file.name
                 
                 # Create another temp file for the converted audio
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_conv_file:
                     temp_converted = tmp_conv_file.name
                 
-                # Convert audio to a compatible format
+                # Try to convert audio to a compatible format
                 st.write("Processing audio file...")
-                success, error_msg = convert_audio_to_wav(audio_bytes, temp_converted)
+                success, error_msg = convert_audio_to_wav(audio_bytes, temp_converted, audio_file.name)
                 
                 if not success:
                     # Fallback: try direct processing
-                    with open(temp_original, 'wb') as f:
-                        f.write(audio_bytes)
                     st.warning(f"Audio conversion failed: {error_msg}. Trying direct processing...")
                     temp_path = temp_original
                 else:
@@ -218,7 +275,9 @@ def main():
                     temp_path = temp_converted
                 
                 # Process and predict
-                predicted_idx, confidence, mel_spec, all_probs, waveform, sample_rate = predict_audio(model, temp_path, device)
+                predicted_idx, confidence, mel_spec, all_probs, waveform, sample_rate = predict_audio(
+                    model, temp_path, device, audio_bytes
+                )
                 
                 # Display results if prediction was successful
                 if predicted_idx is not None:
@@ -291,7 +350,7 @@ def main():
                 
                 if audio_bytes:
                     # Display audio player
-                    st.audio(audio_bytes, format="audio/wav")
+                    st.audio(audio_bytes)
                     
                     # Create temp files for processing
                     temp_original = None
@@ -300,6 +359,7 @@ def main():
                     try:
                         # Create temp files
                         with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
+                            tmp_file.write(audio_bytes)
                             temp_original = tmp_file.name
                         
                         with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_conv_file:
@@ -307,12 +367,10 @@ def main():
                         
                         # Convert audio to a compatible format
                         st.write("Processing audio recording...")
-                        success, error_msg = convert_audio_to_wav(audio_bytes, temp_converted)
+                        success, error_msg = convert_audio_to_wav(audio_bytes, temp_converted, "recording.wav")
                         
                         if not success:
                             # Fallback: try direct processing
-                            with open(temp_original, 'wb') as f:
-                                f.write(audio_bytes)
                             st.warning(f"Audio conversion failed: {error_msg}. Trying direct processing...")
                             temp_path = temp_original
                         else:
@@ -320,7 +378,9 @@ def main():
                             temp_path = temp_converted
                         
                         # Process and predict
-                        predicted_idx, confidence, mel_spec, all_probs, waveform, sample_rate = predict_audio(model, temp_path, device)
+                        predicted_idx, confidence, mel_spec, all_probs, waveform, sample_rate = predict_audio(
+                            model, temp_path, device, audio_bytes
+                        )
                         
                         # Display results if prediction was successful
                         if predicted_idx is not None:
@@ -380,7 +440,7 @@ def main():
     
     The audio is processed into mel spectrograms, which are then fed into the neural network for classification.
     """)
-    st.sidebar.write("[GitHub Repository](https://github.com/mattcoler/speech-digit-recognition)")
+    st.sidebar.write("[GitHub Repository](https://github.com/yourusername/speech-digit-recognition)")
     
     # Add information about mel spectrograms
     st.sidebar.markdown("---")
